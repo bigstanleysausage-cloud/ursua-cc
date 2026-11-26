@@ -1,5 +1,7 @@
 {
   "schema": 1,
   "release": "0.4.3-clean-start",
-  "links": {}
+  "links": {
+    "8foy": "https://mathewursua.com/"
+  }
 }
