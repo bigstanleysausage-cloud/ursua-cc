@@ -44,7 +44,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=False)
     folder = args.out / code
     folder.mkdir()
-    page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><meta http-equiv="refresh" content="0;url='+dest+'"><title>ULQF</title></head><body><a href="'+dest+'">Continue</a></body></html>'
+    page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><meta http-equiv="refresh" content="1;url='+dest+'"><title>ULQF</title><script src="../analytics/client.js" data-alias="'+code+'" data-target="'+dest+'"></script></head><body><a href="'+dest+'">Continue</a></body></html>'
     (folder / "index.html").write_text(page, encoding="utf-8")
     data["links"][code.lower()] = args.url
     (args.out / "links.json").write_text(json.dumps(data, indent=2)+"\n", encoding="utf-8")
