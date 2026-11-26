@@ -1,54 +1,98 @@
 #!/usr/bin/env python3
-"""Stage a public ULQF alias locally. Requires qrcode[pil]. No network writes."""
-import argparse, hashlib, html, json, re, string
+"""Prepare a public alias, redirect page, JSON binding and QR; no network writes."""
+import argparse, hashlib, html, json, string, ipaddress
 from pathlib import Path
 from urllib.parse import urlsplit
 import qrcode
 
 ALPHABET = string.digits + string.ascii_uppercase
+KNOWN_HOLDS = {'ab12', '26d001'}
+SOURCES = ('cloudflare_d1', 'cloudflare_kv', 'glair')
+
 def base36(n, width):
-    out = ""
+    out = ''
     for _ in range(width):
         n, d = divmod(n, 36)
         out = ALPHABET[d] + out
     return out
 
 def allocate(url, issuance, occupied):
+    occupied = {k.lower() for k in occupied}
     for width in (4, 6):
         for nonce in range(1 if width == 4 else 1000):
             digest = hashlib.sha256(json.dumps([url, issuance, nonce], ensure_ascii=False).encode()).digest()
-            code = base36(int.from_bytes(digest, "big") % (36**width), width)
+            code = base36(int.from_bytes(digest, 'big') % (36**width), width)
             if code.lower() not in occupied:
                 return code
-    raise ValueError("Alias space collision; reconcile registry.")
+    raise ValueError('Alias collision; reconcile registry.')
+
+def load_inventory(path, fixture=False):
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict) or data.get('schema') != 1 or data.get('complete') is not True:
+        raise ValueError('Complete reconciled legacy inventory required.')
+    if bool(data.get('fixture_only')) != fixture:
+        raise ValueError('Fixture inventory cannot authorize production; use --fixture-only for local testing.')
+    sources = data.get('sources', {})
+    if not isinstance(sources, dict) or any(not isinstance(sources.get(k), str) or not sources[k].strip() for k in SOURCES):
+        raise ValueError('D1, KV and GLAIR source references required.')
+    codes = data.get('codes')
+    if not isinstance(codes, list) or not all(isinstance(k, str) and k.strip() and k == k.strip() for k in codes):
+        raise ValueError('Inventory codes must be nonempty strings.')
+    reserved = {k.lower() for k in codes}
+    if not KNOWN_HOLDS.issubset(reserved):
+        raise ValueError('Known historical holds missing: AB12 and/or 26D001.')
+    return reserved
+
+def validate_destination(url):
+    u = urlsplit(url)
+    host = (u.hostname or '').lower().rstrip('.')
+    if (u.scheme != 'https' or not host or '.' not in host or u.username or u.password or
+        host in {'ursua.cc','www.ursua.cc','bigstanleysausage-cloud.github.io'} or host.endswith(('.local','.localhost','.internal')) or
+        any(c.isspace() or ord(c)<32 for c in url)):
+        raise ValueError('Use an approved public HTTPS destination; no credentials or resolver loops.')
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        if not address.is_global:
+            raise ValueError('Nonpublic IP destination forbidden.')
+    return url
+
+def prepare(url, issuance, registry, inventory, out, fixture=False):
+    validate_destination(url)
+    if not issuance.strip():
+        raise ValueError('Issuance ID required.')
+    data = json.loads(registry.read_text())
+    if data.get('schema') != 1 or not isinstance(data.get('links'), dict):
+        raise ValueError('Unsupported registry schema.')
+    reserved = load_inventory(inventory, fixture)
+    code = allocate(url, issuance, set(data['links']) | reserved)
+    short = 'https://ursua.cc/' + code
+    dest = html.escape(url, quote=True)
+    out.mkdir(parents=True, exist_ok=False)
+    folder = out / code
+    folder.mkdir()
+    page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><meta http-equiv="refresh" content="2;url='+dest+'"><title>ULQF</title><script defer src="/analytics/client.js?v=0.4.2" data-alias="'+code+'" data-target="'+dest+'"></script></head><body><a href="'+dest+'">Continue</a></body></html>'
+    (folder / 'index.html').write_text(page, encoding='utf-8')
+    data['links'][code.lower()] = url
+    (out / 'links.json').write_text(json.dumps(data, indent=2)+'\n', encoding='utf-8')
+    qrcode.make(short).save(out / (code+'.png'))
+    manifest = {'alias':code,'short_url':short,'destination':url,'issuance_id':issuance,'status':'FIXTURE_ONLY_NOT_ISSUED' if fixture else 'LOCAL_STAGED_NOT_ISSUED','registry_sha256':hashlib.sha256(registry.read_bytes()).hexdigest(),'inventory_sha256':hashlib.sha256(inventory.read_bytes()).hexdigest(),'qr_sha256':hashlib.sha256((out / (code+'.png')).read_bytes()).hexdigest()}
+    (out / 'issuance.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
+    return manifest
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("url")
-    p.add_argument("issuance_id")
-    p.add_argument("--registry", type=Path, required=True, help="Current links.json from repo")
-    p.add_argument("--reserved", type=Path, required=True, help="JSON array of ALL historical/reserved aliases from reconciled private registry")
-    p.add_argument("--out", type=Path, required=True)
-    args = p.parse_args()
-    u = urlsplit(args.url)
-    if u.scheme != "https" or not u.hostname or u.username or u.password or u.hostname.lower().rstrip(".") in {"ursua.cc","www.ursua.cc","bigstanleysausage-cloud.github.io"} or any(c.isspace() or ord(c)<32 for c in args.url):
-        p.error("Only valid public HTTPS destinations; no credentials or resolver loops.")
-    data = json.loads(args.registry.read_text())
-    reserved = json.loads(args.reserved.read_text())
-    if not isinstance(reserved, list) or not all(isinstance(x,str) for x in reserved):
-        p.error("Reserved must be a JSON array of codes.")
-    occupied = {k.lower() for k in data["links"]} | {k.lower() for k in reserved}
-    code = allocate(args.url, args.issuance_id, occupied)
-    short = "https://ursua.cc/" + code
-    dest = html.escape(args.url, quote=True)
-    args.out.mkdir(parents=True, exist_ok=False)
-    folder = args.out / code
-    folder.mkdir()
-    page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><meta http-equiv="refresh" content="1;url='+dest+'"><title>ULQF</title><script src="../analytics/client.js" data-alias="'+code+'" data-target="'+dest+'"></script></head><body><a href="'+dest+'">Continue</a></body></html>'
-    (folder / "index.html").write_text(page, encoding="utf-8")
-    data["links"][code.lower()] = args.url
-    (args.out / "links.json").write_text(json.dumps(data, indent=2)+"\n", encoding="utf-8")
-    qrcode.make(short).save(args.out / (code+".png"))
-    print(json.dumps({"alias":code,"short_url":short,"status":"LOCAL_STAGED_NOT_ISSUED"}))
-if __name__ == "__main__":
+    p.add_argument('url'); p.add_argument('issuance_id')
+    p.add_argument('--registry', type=Path, required=True)
+    p.add_argument('--reserved', type=Path, required=True, help='Complete inventory JSON, see tools/ISSUANCE.md')
+    p.add_argument('--out', type=Path, required=True)
+    p.add_argument('--fixture-only', action='store_true')
+    a = p.parse_args()
+    try:
+        print(json.dumps(prepare(a.url,a.issuance_id,a.registry,a.reserved,a.out,a.fixture_only)))
+    except (ValueError, KeyError, OSError) as e:
+        p.error(str(e))
+if __name__ == '__main__':
     main()
