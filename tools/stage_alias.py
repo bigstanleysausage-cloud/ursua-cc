@@ -4,6 +4,7 @@ import argparse, hashlib, html, json, string, ipaddress
 from pathlib import Path
 from urllib.parse import urlsplit
 import qrcode
+import ulmi
 
 ALPHABET = string.digits + string.ascii_uppercase
 KNOWN_HOLDS = {'ab12', '26d001'}
@@ -62,7 +63,7 @@ def validate_destination(url):
             raise ValueError('Nonpublic IP destination forbidden.')
     return url
 
-def prepare(url, issuance, registry, inventory, out, fixture=False):
+def prepare(url, issuance, registry, inventory, out, fixture=False, metadata_mode='NONE', metadata=None, canonical='ALIAS'):
     validate_destination(url)
     if not issuance.strip():
         raise ValueError('Issuance ID required.')
@@ -73,15 +74,25 @@ def prepare(url, issuance, registry, inventory, out, fixture=False):
     code = allocate(url, issuance, set(data['links']) | reserved)
     short = 'https://ursua.cc/' + code
     dest = html.escape(url, quote=True)
+    if metadata_mode == 'NONE' and metadata is not None:
+        raise ValueError('Metadata supplied for NONE mode')
+    preview = None if metadata_mode == 'NONE' else ulmi.sanitize(metadata, url) if metadata_mode != 'PASSTHROUGH' else None
+    if metadata_mode != 'NONE':
+        preview_page = ulmi.render(code, url, metadata_mode, preview, canonical)
     out.mkdir(parents=True, exist_ok=False)
     folder = out / code
     folder.mkdir()
     page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><meta http-equiv="refresh" content="2;url='+dest+'"><title>ULQF</title><script defer src="/analytics/client.js?v=0.4.2" data-alias="'+code+'" data-target="'+dest+'"></script></head><body><a href="'+dest+'">Continue</a></body></html>'
+    if metadata_mode != 'NONE':
+        page = preview_page
+        (out / 'preview-metadata.json').write_text(json.dumps(preview, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
     (folder / 'index.html').write_text(page, encoding='utf-8')
     data['links'][code.lower()] = url
     (out / 'links.json').write_text(json.dumps(data, indent=2)+'\n', encoding='utf-8')
     qrcode.make(short).save(out / (code+'.png'))
     manifest = {'alias':code,'short_url':short,'destination':url,'issuance_id':issuance,'status':'FIXTURE_ONLY_NOT_ISSUED' if fixture else 'LOCAL_STAGED_NOT_ISSUED','inventory_mode':'clean-start','authorization':CLEAN_START_ID,'registry_sha256':hashlib.sha256(registry.read_bytes()).hexdigest(),'inventory_sha256':hashlib.sha256(inventory.read_bytes()).hexdigest(),'qr_sha256':hashlib.sha256((out / (code+'.png')).read_bytes()).hexdigest()}
+    if metadata_mode != 'NONE':
+        manifest.update({'metadata_mode':metadata_mode,'canonical_policy':canonical,'metadata_sha256':ulmi.fingerprint(preview)})
     (out / 'issuance.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
     return manifest
 
@@ -92,9 +103,12 @@ def main():
     p.add_argument('--reserved', type=Path, required=True, help='Complete current-era inventory JSON, see tools/ISSUANCE.md')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--fixture-only', action='store_true')
+    p.add_argument('--metadata-mode', choices=ulmi.MODES, default='NONE')
+    p.add_argument('--metadata', type=Path, help='Private validated metadata JSON; never publish this file')
+    p.add_argument('--canonical', choices=('ALIAS','DESTINATION'), default='ALIAS')
     a = p.parse_args()
     try:
-        print(json.dumps(prepare(a.url,a.issuance_id,a.registry,a.reserved,a.out,a.fixture_only)))
+        print(json.dumps(prepare(a.url,a.issuance_id,a.registry,a.reserved,a.out,a.fixture_only,a.metadata_mode,json.loads(a.metadata.read_text()) if a.metadata else None,a.canonical)))
     except (ValueError, KeyError, OSError) as e:
         p.error(str(e))
 if __name__ == '__main__':
