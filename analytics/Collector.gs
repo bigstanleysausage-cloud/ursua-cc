@@ -16,6 +16,7 @@ function doPost(e) {
     if(typeof raw!=="string" || raw.length>1024) return reply_({ok:false,reason:"invalid"});
     p=JSON.parse(raw);
     if(!p || typeof p!=="object" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(p.id||"") || typeof p.alias!=="string") return reply_({ok:false,reason:"invalid"});
+    p.id=p.id.toLowerCase();
     const code=p.alias.toLowerCase();
     if(code!==ULQF.canary && !/^[a-z0-9]{4}(?:[a-z0-9]{2})?$/.test(code)) return reply_({ok:false,reason:"invalid"});
     const props=PropertiesService.getScriptProperties();
