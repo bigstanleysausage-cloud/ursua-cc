@@ -2,9 +2,10 @@
 (function(){
   "use strict";
   const script=document.currentScript;
-  const config=Object.freeze({endpoint:""}); // Set only after verified Apps Script deployment.
+  const config=Object.freeze({endpoint:"https://script.google.com/macros/s/AKfycbzqXmGU6W-T6EdSLY2v1xeDOF90eJQnypcb5MnSOfBj8M6J0vb-urukZ7NUjy_Q_UbRvQ/exec"}); // Canary-only acceptance stage; production disabled.
   function track(code){
     try{
+      if(code.toLowerCase()!=="ulqf-canary")return;
       if(!config.endpoint || !/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(config.endpoint))return;
       if(navigator.globalPrivacyControl===true || navigator.doNotTrack==="1")return;
       if(!globalThis.crypto || typeof crypto.randomUUID!=="function")return;
