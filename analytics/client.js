@@ -13,12 +13,13 @@
       const ua=navigator.userAgent||"";
       const device=/iPad|Tablet/i.test(ua)?"tablet":/Mobile|Android|iPhone/i.test(ua)?"mobile":ua?"desktop":"unknown";
       const body=JSON.stringify({id:crypto.randomUUID(),alias:code.toLowerCase(),ref,device});
-      if(typeof navigator.sendBeacon==="function"&&navigator.sendBeacon(config.endpoint,body))return;
-      fetch(config.endpoint,{method:"POST",body,mode:"no-cors",keepalive:true,credentials:"omit"}).catch(()=>{});
+      return fetch(config.endpoint,{method:"POST",headers:{"Content-Type":"text/plain;charset=UTF-8"},body,mode:"no-cors",keepalive:true,credentials:"omit"}).catch(()=>{});
     }catch(_){}
   }
   function go(code,target){
-    try{track(code);}finally{location.replace(target);}
+    let navigated=false;
+    const finish=()=>{if(!navigated){navigated=true;location.replace(target);}};
+    try{const pending=track(code);if(!pending){finish();return;}setTimeout(finish,900);Promise.resolve(pending).then(finish,finish);}catch(_){finish();}
   }
   window.ULQF={go};
   if(script && script.dataset.alias && script.dataset.target)go(script.dataset.alias,script.dataset.target);
