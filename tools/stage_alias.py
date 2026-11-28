@@ -18,9 +18,14 @@ def base36(n, width):
         out = ALPHABET[d] + out
     return out
 
-def allocate(url, issuance, occupied):
+def allocate(url, issuance, occupied, purpose='AUTO'):
     occupied = {k.lower() for k in occupied}
-    for width in (4, 6):
+    if purpose not in ('AUTO', 'PERSONAL', 'SOCIAL'):
+        raise ValueError('Unsupported alias purpose.')
+    host = (urlsplit(url).hostname or '').lower().rstrip('.')
+    social_hosts = ('youtube.com', 'youtu.be', 'facebook.com', 'fb.watch', 'instagram.com', 'threads.net', 'threads.com', 'tiktok.com', 'x.com', 'twitter.com', 'linkedin.com', 'reddit.com', 'twitch.tv', 'bsky.app')
+    is_social = purpose == 'SOCIAL' or any(host == h or host.endswith('.' + h) for h in social_hosts)
+    for width in ((6,) if is_social else (4, 6)):
         for nonce in range(1 if width == 4 else 1000):
             digest = hashlib.sha256(json.dumps([url, issuance, nonce], ensure_ascii=False).encode()).digest()
             code = base36(int.from_bytes(digest, 'big') % (36**width), width)
@@ -63,7 +68,7 @@ def validate_destination(url):
             raise ValueError('Nonpublic IP destination forbidden.')
     return url
 
-def prepare(url, issuance, registry, inventory, out, fixture=False, metadata_mode='NONE', metadata=None, canonical='ALIAS'):
+def prepare(url, issuance, registry, inventory, out, fixture=False, metadata_mode='NONE', metadata=None, canonical='ALIAS', purpose='AUTO'):
     validate_destination(url)
     if not issuance.strip():
         raise ValueError('Issuance ID required.')
@@ -71,7 +76,7 @@ def prepare(url, issuance, registry, inventory, out, fixture=False, metadata_mod
     if data.get('schema') != 1 or not isinstance(data.get('links'), dict):
         raise ValueError('Unsupported registry schema.')
     reserved = load_inventory(inventory, fixture)
-    code = allocate(url, issuance, set(data['links']) | reserved)
+    code = allocate(url, issuance, set(data['links']) | reserved, purpose)
     short = 'https://ursua.cc/' + code
     dest = html.escape(url, quote=True)
     if metadata_mode == 'NONE' and metadata is not None:
@@ -91,6 +96,7 @@ def prepare(url, issuance, registry, inventory, out, fixture=False, metadata_mod
     (out / 'links.json').write_text(json.dumps(data, indent=2)+'\n', encoding='utf-8')
     qrcode.make(short).save(out / (code+'.png'))
     manifest = {'alias':code,'short_url':short,'destination':url,'issuance_id':issuance,'status':'FIXTURE_ONLY_NOT_ISSUED' if fixture else 'LOCAL_STAGED_NOT_ISSUED','inventory_mode':'clean-start','authorization':CLEAN_START_ID,'registry_sha256':hashlib.sha256(registry.read_bytes()).hexdigest(),'inventory_sha256':hashlib.sha256(inventory.read_bytes()).hexdigest(),'qr_sha256':hashlib.sha256((out / (code+'.png')).read_bytes()).hexdigest()}
+    manifest.update({'alias_purpose':purpose,'alias_length':len(code)})
     if metadata_mode != 'NONE':
         manifest.update({'metadata_mode':metadata_mode,'canonical_policy':canonical,'metadata_sha256':ulmi.fingerprint(preview)})
     (out / 'issuance.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
@@ -106,9 +112,10 @@ def main():
     p.add_argument('--metadata-mode', choices=ulmi.MODES, default='NONE')
     p.add_argument('--metadata', type=Path, help='Private validated metadata JSON; never publish this file')
     p.add_argument('--canonical', choices=('ALIAS','DESTINATION'), default='ALIAS')
+    p.add_argument('--purpose', choices=('AUTO','PERSONAL','SOCIAL'), default='AUTO', help='SOCIAL for public social distribution; known social hosts always use six characters')
     a = p.parse_args()
     try:
-        print(json.dumps(prepare(a.url,a.issuance_id,a.registry,a.reserved,a.out,a.fixture_only,a.metadata_mode,json.loads(a.metadata.read_text()) if a.metadata else None,a.canonical)))
+        print(json.dumps(prepare(a.url,a.issuance_id,a.registry,a.reserved,a.out,a.fixture_only,a.metadata_mode,json.loads(a.metadata.read_text()) if a.metadata else None,a.canonical,a.purpose)))
     except (ValueError, KeyError, OSError) as e:
         p.error(str(e))
 if __name__ == '__main__':
